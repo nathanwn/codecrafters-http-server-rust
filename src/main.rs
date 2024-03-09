@@ -26,8 +26,20 @@ fn parse_request(first_line: String) -> Request {
     );
 }
 
-fn respond(tcp_stream: &mut TcpStream, respond_code: usize, msg: &str) -> io::Result<()> {
-    let response = format!("HTTP/1.1 {} {}\r\n\r\n", respond_code, msg);
+fn respond(
+    tcp_stream: &mut TcpStream,
+    respond_code: usize,
+    msg: &str,
+    body: &str,
+) -> io::Result<()> {
+    let response = [
+        format!("HTTP/1.1 {} {}", respond_code, msg),
+        String::from("Content-Type: text/plain"),
+        format!("Content-Length: {}", body.len()),
+        String::new(),
+        String::from(body),
+    ]
+    .join("\r\n");
     tcp_stream.write(response.as_bytes())?;
     tcp_stream.flush()?;
     Ok(())
@@ -39,12 +51,13 @@ fn handle_connection(tcp_stream: &mut TcpStream) -> io::Result<()> {
     let mut line = String::new();
     reader.read_line(&mut line)?;
     let request = parse_request(line);
-    if request.path == "/" {
-        respond(tcp_stream, 200, "OK")?;
+    if let Some(payload) = request.path.strip_prefix("/echo/") {
+        respond(tcp_stream, 200, "OK", payload)?
+    } else if request.path == "/" {
+        respond(tcp_stream, 200, "OK", "")?
     } else {
-        respond(tcp_stream, 404, "Not Found")?;
+        respond(tcp_stream, 404, "Not Found", "")?
     }
-    println!("{:?}", request);
     Ok(())
 }
 
