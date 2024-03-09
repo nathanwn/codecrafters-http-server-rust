@@ -3,6 +3,7 @@ use std::fs;
 use std::io;
 use std::io::BufRead;
 use std::io::BufReader;
+use std::io::Read;
 use std::io::Write;
 use std::net::TcpListener;
 use std::net::TcpStream;
@@ -19,39 +20,38 @@ struct Args {
 
 #[allow(dead_code)]
 #[derive(Debug)]
-struct Request {
+struct RequestHeader {
     method: String,
     path: String,
     user_agent: Option<String>,
+    content_length: Option<usize>,
 }
 
-impl Request {
-    fn new(method: String, path: String, user_agent: Option<String>) -> Self {
-        Request {
-            method,
-            path,
-            user_agent,
-        }
-    }
-}
-
-fn parse_request(lines: &Vec<String>) -> Request {
+fn parse_request_header(lines: &Vec<String>) -> RequestHeader {
     let first_line = lines[0].clone();
     let first_line_tokens: Vec<_> = first_line.split(" ").collect();
+    let method = String::from(first_line_tokens[0]);
+    let path = String::from(first_line_tokens[1]);
+
     let mut user_agent: Option<String> = None;
+    let mut content_length: Option<usize> = None;
+
     for i in 1..lines.len() {
         let line = lines[i].clone();
         if let Some(val) = line.strip_prefix("User-Agent: ") {
             user_agent = Some(String::from(val));
-            break;
+        }
+        if let Some(val) = line.strip_prefix("Content-Length: ") {
+            content_length = Some(val.parse::<usize>().unwrap());
         }
     }
-    println!("{:?}", lines);
-    return Request::new(
-        String::from(first_line_tokens[0]),
-        String::from(first_line_tokens[1]),
+
+    return RequestHeader {
+        method,
+        path,
         user_agent,
-    );
+        content_length,
+    };
 }
 
 fn respond(
@@ -76,7 +76,7 @@ fn respond(
 
 fn handle_connection(tcp_stream: &mut TcpStream, directory: Option<String>) -> io::Result<()> {
     let mut reader = BufReader::new(tcp_stream.try_clone()?);
-    let mut lines: Vec<String> = Vec::new();
+    let mut header_lines: Vec<String> = Vec::new();
     loop {
         let mut chars: Vec<u8> = Vec::new();
         let mut line: Option<String> = None;
@@ -93,15 +93,23 @@ fn handle_connection(tcp_stream: &mut TcpStream, directory: Option<String>) -> i
             if line_text.len() == 0 {
                 break;
             }
-            lines.push(line_text);
+            header_lines.push(line_text);
         }
     }
-    let request = parse_request(&lines);
-    if directory.is_some() && request.method == "GET" && request.path.starts_with("/files/") {
-        let filename = request.path.strip_prefix("/files/").unwrap();
+    let header = parse_request_header(&header_lines);
+    if header.method == "POST" && header.content_length.is_some() && directory.is_some() {
+        let filename = header.path.strip_prefix("/files/").unwrap();
+        let filepath = Path::new(directory.unwrap().as_str()).join(filename);
+        let mut buf: Vec<u8> = vec![0u8; header.content_length.unwrap()];
+        reader.read_exact(&mut buf)?;
+        let content = String::from_utf8(buf).unwrap();
+        fs::write(filepath, content).expect("File should be written successfully.");
+        respond(tcp_stream, 201, "OK", "text/plain", "")?
+    } else if directory.is_some() && header.method == "GET" && header.path.starts_with("/files/") {
+        let filename = header.path.strip_prefix("/files/").unwrap();
         let filepath = Path::new(directory.unwrap().as_str()).join(filename);
         if filepath.exists() {
-            let content = fs::read_to_string(filepath).expect("File should be read.");
+            let content = fs::read_to_string(filepath).expect("File should be read successfully.");
             respond(
                 tcp_stream,
                 200,
@@ -112,13 +120,13 @@ fn handle_connection(tcp_stream: &mut TcpStream, directory: Option<String>) -> i
         } else {
             respond(tcp_stream, 404, "Not Found", "text/plain", "")?
         }
-    } else if request.path.starts_with("/echo/") {
-        let payload = request.path.strip_prefix("/echo/").unwrap();
+    } else if header.path.starts_with("/echo/") {
+        let payload = header.path.strip_prefix("/echo/").unwrap();
         respond(tcp_stream, 200, "OK", "text/plain", payload)?
-    } else if request.path == "/" {
+    } else if header.path == "/" {
         respond(tcp_stream, 200, "OK", "text/plain", "")?
-    } else if request.path == "/user-agent" {
-        if let Some(user_agent) = request.user_agent {
+    } else if header.path == "/user-agent" {
+        if let Some(user_agent) = header.user_agent {
             respond(tcp_stream, 200, "OK", "text/plain", user_agent.as_str())?
         } else {
             panic!()
