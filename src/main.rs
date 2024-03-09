@@ -4,6 +4,7 @@ use std::io::BufReader;
 use std::io::Write;
 use std::net::TcpListener;
 use std::net::TcpStream;
+use std::thread;
 
 #[allow(dead_code)]
 #[derive(Debug)]
@@ -106,7 +107,9 @@ fn main() {
         match stream {
             Ok(mut tcp_stream) => {
                 println!("accepted new connection");
-                handle_connection(&mut tcp_stream).expect("Responded successfully");
+                thread::spawn(move || {
+                    handle_connection(&mut tcp_stream).expect("Responded successfully");
+                });
                 println!("done");
             }
             Err(e) => {
